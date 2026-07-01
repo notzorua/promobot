@@ -86,6 +86,7 @@ else:
 # ---- WEBHOOK ENDPOINT ----
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    """Обработчик вебхука: ищет ключевые слова ВНУТРИ текста сообщения"""
     update_data = request.get_json()
     if not update_data:
         return 'No data', 400
@@ -98,35 +99,58 @@ def webhook():
         if not text or not chat_id:
             return 'ok', 200
 
-        print(f"Got message: {text} from {chat_id}")
-        keyword = text.lower().strip()
+        logger.info(f"💬 Webhook: '{text}' from {chat_id}")
+        text_lower = text.lower().strip()
 
-        response = req.get(f"{WEB_APP_URL}/api/promo/{keyword}", timeout=5)
-        if response.status_code == 200:
-            promo = response.json()
-            if "error" not in promo:
-                reply = f"*{promo['title']}*\n"
-                reply += f"Промокод: `{promo['promo']}`\n"
-                if promo.get("conditions"):
-                    for line in promo["conditions"].split("\n"):
-                        if line.strip():
-                            reply += f" - {line.strip()}\n"
-                if promo.get("link"):
-                    reply += f"\n[Перейти на сайт]({promo['link']})"
+        # 1. Получаем ВСЕ промокоды
+        promos_response = req.get(f"{WEB_APP_URL}/api/promos", timeout=5)
+        if promos_response.status_code != 200:
+            logger.warning("⚠️ Не удалось загрузить список промокодов")
+            return 'ok', 200
+        
+        promos = promos_response.json()
+        
+        # 2. Ищем совпадение внутри текста (длинные ключи в приоритете)
+        found_promo = None
+        sorted_promos = sorted(promos, key=lambda p: len(p['keyword']), reverse=True)
+        for promo in sorted_promos:
+            keyword = promo['keyword'].lower()
+            if keyword in text_lower:
+                logger.info(f"🔍 Найдено: '{keyword}' в '{text}'")
+                found_promo = promo
+                break
+        
+        # 3. Если нашли — отправляем ответ
+        if found_promo:
+            reply = f"*{found_promo['title']}*\n"
+            reply += f"Промокод: `{found_promo['promo']}`\n"
+            if found_promo.get("conditions"):
+                for line in found_promo["conditions"].split("\n"):
+                    if line.strip():
+                        reply += f" - {line.strip()}\n"
+            if found_promo.get("link"):
+                reply += f"\n[Перейти на сайт]({found_promo['link']})"
 
-                req.post(
-                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": reply,
-                        "parse_mode": "Markdown"
-                    },
-                    timeout=5
-                )
-                print(f"Reply sent to {chat_id}")
+            response = req.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": reply,
+                    "parse_mode": "Markdown"
+                },
+                timeout=5
+            )
+            
+            # Проверяем ответ от Telegram API
+            if response.status_code == 200 and response.json().get("ok"):
+                logger.info(f"✅ Ответ отправлен в {chat_id}")
+            else:
+                logger.error(f"❌ Telegram API error: {response.text}")
+        else:
+            logger.info(f"🤫 Ключевые слова не найдены в: '{text}'")
 
     except Exception as e:
-        print(f"Webhook error: {e}")
+        logger.error(f"💥 Webhook error: {e}")
 
     return 'ok', 200
 
