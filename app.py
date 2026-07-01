@@ -83,7 +83,6 @@ else:
     print("WARNING: BOT_TOKEN not set!")
 
 
-# ---- WEBHOOK ENDPOINT ----
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Обработчик вебхука: ищет ключевые слова ВНУТРИ текста сообщения"""
@@ -99,13 +98,13 @@ def webhook():
         if not text or not chat_id:
             return 'ok', 200
 
-        logger.info(f"💬 Webhook: '{text}' from {chat_id}")
+        print(f"💬 Webhook: '{text}' from {chat_id}")
         text_lower = text.lower().strip()
 
         # 1. Получаем ВСЕ промокоды
         promos_response = req.get(f"{WEB_APP_URL}/api/promos", timeout=5)
         if promos_response.status_code != 200:
-            logger.warning("⚠️ Не удалось загрузить список промокодов")
+            print("⚠️ Не удалось загрузить список промокодов")
             return 'ok', 200
         
         promos = promos_response.json()
@@ -116,7 +115,7 @@ def webhook():
         for promo in sorted_promos:
             keyword = promo['keyword'].lower()
             if keyword in text_lower:
-                logger.info(f"🔍 Найдено: '{keyword}' в '{text}'")
+                print(f"🔍 Найдено: '{keyword}' в '{text}'")
                 found_promo = promo
                 break
         
@@ -143,14 +142,14 @@ def webhook():
             
             # Проверяем ответ от Telegram API
             if response.status_code == 200 and response.json().get("ok"):
-                logger.info(f"✅ Ответ отправлен в {chat_id}")
+                print(f"✅ Ответ отправлен в {chat_id}")
             else:
-                logger.error(f"❌ Telegram API error: {response.text}")
+                print(f"❌ Telegram API error: {response.text}")
         else:
-            logger.info(f"🤫 Ключевые слова не найдены в: '{text}'")
+            print(f"🤫 Ключевые слова не найдены в: '{text}'")
 
     except Exception as e:
-        logger.error(f"💥 Webhook error: {e}")
+        print(f"💥 Webhook error: {e}")
 
     return 'ok', 200
 
