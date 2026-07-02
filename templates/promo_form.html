@@ -10,7 +10,7 @@
         type="text"
         id="keywords"
         name="keywords"
-        value="{{ promo.keyword if promo else '' }}"
+        value="{{ promo.keywords_list|map(attribute='keyword')|join(', ') if promo and promo.keywords_list else promo.keyword if promo else '' }}"
         required
         placeholder="перекресток, перекрёсток, perekrestok"
       />
