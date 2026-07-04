@@ -249,6 +249,20 @@ def delete_promo(id):
     flash('Промокод удалён', 'success')
     return redirect(url_for('dashboard'))
 
+# --- АВТОУСТАНОВКА ВЕБХУКА ПРИ СТАРТЕ ---
+try:
+    import requests
+    webhook_url = f"{WEB_APP_URL}/webhook"
+    # setWebhook вызывается один раз при загрузке модуля (idempotent)
+    res = requests.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook",
+        json={"url": webhook_url, "drop_pending_updates": True},
+        timeout=10
+    )
+    print(f"🤖 Webhook setup: {res.status_code} - {res.text[:100]}")
+except Exception as e:
+    print(f"⚠️ Не удалось установить вебхук при старте: {e}")
+    
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
