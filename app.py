@@ -58,11 +58,12 @@ def get_all_promos():
 # ---- WEBHOOK (бот отвечает здесь) ----
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Обработчик вебхука: ищет ключевые слова ВНУТРИ текста (без HTTP-запросов к себе!)"""
-    from database import Promo, Keyword  # Импортируем модели внутри функции
+    """Обработчик вебхука: ищет ключевые слова ВНУТРИ текста"""
+    from database import Promo, Keyword
     
     update_data = request.get_json()
     if not update_data:
+        print("❌ Webhook: нет данных", flush=True)
         return 'No data', 400
 
     try:
@@ -71,35 +72,44 @@ def webhook():
         chat_id = message.get('chat', {}).get('id')
 
         if not text or not chat_id:
+            print(f"⚠️ Пропуск: text={bool(text)}, chat_id={bool(chat_id)}", flush=True)
             return 'ok', 200
 
-        print(f"💬 Webhook: '{text}' from {chat_id}")
+        print(f"💬 Webhook: '{text}' from {chat_id}", flush=True)
         text_lower = text.lower().strip()
 
-        # 🔹 ПРЯМОЙ ЗАПРОС К БАЗЕ (вместо requests.get к самому себе!)
+        # Загружаем все промокоды
         promos = Promo.query.all()
+        print(f"📦 Загружено {len(promos)} промокодов из БД", flush=True)
         
-        # Строим карту: {ключевое_слово: данные_промокода}
+        # Строим карту ключей с отладкой
         keyword_map = {}
         for promo in promos:
-            # Собираем все ключи: из новой таблицы + старое поле
-            keys = [k.keyword.lower().strip() for k in promo.keywords_list]
+            # Собираем все ключи: новая таблица + старое поле
+            keys = []
+            if promo.keywords_list:
+                keys.extend([k.keyword.lower().strip() for k in promo.keywords_list if k.keyword])
             if promo.keyword and promo.keyword.lower().strip() not in keys:
                 keys.append(promo.keyword.lower().strip())
             
             for kw in keys:
-                if kw:  # пропускаем пустые
-                    keyword_map[kw] = promo.to_dict()  # используем to_dict для форматирования
+                if kw and kw not in keyword_map:  # первый ключ побеждает при конфликте
+                    keyword_map[kw] = promo.to_dict()
         
-        print(f"🗂️ Построена карта из {len(keyword_map)} ключей")
+        print(f"🗂️ Построена карта из {len(keyword_map)} уникальных ключей", flush=True)
+        # Покажем первые 5 ключей для отладки
+        sample_keys = list(keyword_map.keys())[:5]
+        print(f"🔑 Примеры ключей: {sample_keys}", flush=True)
         
-        # Ищем совпадение в тексте (длинные ключи в приоритете)
+        # Ищем совпадение (длинные ключи в приоритете)
         found_promo = None
+        found_keyword = None
         sorted_keys = sorted(keyword_map.keys(), key=len, reverse=True)
         for kw in sorted_keys:
             if kw in text_lower:
                 found_promo = keyword_map[kw]
-                print(f"🎯 Найдено: '{kw}' в '{text}'")
+                found_keyword = kw
+                print(f"🎯 НАЙДЕНО: '{kw}' в '{text}'", flush=True)
                 break
         
         if found_promo:
@@ -118,14 +128,18 @@ def webhook():
                 timeout=5
             )
             if response.status_code == 200 and response.json().get("ok"):
-                print(f"✅ Ответ отправлен в {chat_id}")
+                print(f"✅ ОТВЕТ ОТПРАВЛЕН в {chat_id}", flush=True)
             else:
-                print(f"❌ Telegram API error: {response.text}")
+                print(f"❌ Telegram API error: {response.status_code} - {response.text}", flush=True)
         else:
-            print(f"🤫 Ключевые слова не найдены в: '{text}'")
+            print(f"🤫 НЕ НАЙДЕНО ключей в тексте: '{text}'", flush=True)
+            # Покажем, какие ключи БЛИЗКИ (для отладки)
+            close_matches = [kw for kw in keyword_map.keys() if kw in text_lower or text_lower in kw]
+            if close_matches:
+                print(f"🔍 Близкие совпадения: {close_matches}", flush=True)
 
     except Exception as e:
-        print(f"💥 Webhook error: {e}")
+        print(f"💥 Webhook CRASH: {e}", flush=True)
         import traceback
         traceback.print_exc()
 
@@ -262,7 +276,7 @@ try:
     print(f"🤖 Webhook setup: {res.status_code} - {res.text[:100]}")
 except Exception as e:
     print(f"⚠️ Не удалось установить вебхук при старте: {e}")
-    
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
