@@ -58,8 +58,8 @@ def get_all_promos():
 # ---- WEBHOOK (бот отвечает здесь) ----
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Обработчик вебхука: ищет ключевые слова ВНУТРИ текста"""
-    from database import Promo, Keyword
+    """Обработчик вебхука: ищет ключевые слова ВНУТРИ текста + защита от Markdown ошибок"""
+    from database import Promo
     
     update_data = request.get_json()
     if not update_data:
@@ -71,75 +71,101 @@ def webhook():
         text = message.get('text', '')
         chat_id = message.get('chat', {}).get('id')
 
+        # Игнорируем пустые сообщения или сервисные уведомления
         if not text or not chat_id:
-            print(f"⚠️ Пропуск: text={bool(text)}, chat_id={bool(chat_id)}", flush=True)
             return 'ok', 200
 
         print(f"💬 Webhook: '{text}' from {chat_id}", flush=True)
         text_lower = text.lower().strip()
 
-        # Загружаем все промокоды
+        # 1. Загружаем ВСЕ промокоды из БД напрямую (быстро и надёжно)
         promos = Promo.query.all()
-        print(f"📦 Загружено {len(promos)} промокодов из БД", flush=True)
         
-        # Строим карту ключей с отладкой
+        # 2. Строим карту соответствия: {ключевое_слово: данные_промокода}
         keyword_map = {}
         for promo in promos:
-            # Собираем все ключи: новая таблица + старое поле
+            # Собираем ключи: из новой таблицы keywords + старое поле keyword (для совместимости)
             keys = []
             if promo.keywords_list:
                 keys.extend([k.keyword.lower().strip() for k in promo.keywords_list if k.keyword])
+            
+            # Добавляем старое поле, если его нет в новых ключах
             if promo.keyword and promo.keyword.lower().strip() not in keys:
                 keys.append(promo.keyword.lower().strip())
             
+            # Заполняем карту (первое совпадение приоритетнее, если ключи дублируются у разных промокодов)
             for kw in keys:
-                if kw and kw not in keyword_map:  # первый ключ побеждает при конфликте
-                    keyword_map[kw] = promo.to_dict()
+                if kw and kw not in keyword_map:
+                    keyword_map[kw] = promo
         
-        print(f"🗂️ Построена карта из {len(keyword_map)} уникальных ключей", flush=True)
-        # Покажем первые 5 ключей для отладки
-        sample_keys = list(keyword_map.keys())[:5]
-        print(f"🔑 Примеры ключей: {sample_keys}", flush=True)
-        
-        # Ищем совпадение (длинные ключи в приоритете)
+        # 3. Ищем совпадение в тексте сообщения
+        # Сортируем по длине ключа (убывание), чтобы "вкусвилл доставка" не ловилось как "вкусвилл"
         found_promo = None
         found_keyword = None
         sorted_keys = sorted(keyword_map.keys(), key=len, reverse=True)
+        
         for kw in sorted_keys:
             if kw in text_lower:
                 found_promo = keyword_map[kw]
                 found_keyword = kw
-                print(f"🎯 НАЙДЕНО: '{kw}' в '{text}'", flush=True)
                 break
         
         if found_promo:
+            print(f"🎯 НАЙДЕНО: '{found_keyword}' в '{text}'", flush=True)
+            
+            # Формируем сообщение в Markdown
             reply = f"*{found_promo['title']}*\n"
             reply += f"Промокод: `{found_promo['promo']}`\n"
+            
             if found_promo.get("conditions"):
+                # Разбиваем условия по строкам для красоты
+                conditions_text = ""
                 for line in found_promo["conditions"].split("\n"):
                     if line.strip():
-                        reply += f" - {line.strip()}\n"
+                        conditions_text += f" - {line.strip()}\n"
+                reply += conditions_text
+            
             if found_promo.get("link"):
                 reply += f"\n[Перейти на сайт]({found_promo['link']})"
 
+            # --- ОТПРАВКА С ЗАЩИТОЙ ОТ ОШИБОК MARDOWN ---
+            
+            # Попытка 1: Отправить с Markdown
             response = requests.post(
                 f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                json={"chat_id": chat_id, "text": reply, "parse_mode": "Markdown"},
+                json={
+                    "chat_id": chat_id, 
+                    "text": reply, 
+                    "parse_mode": "Markdown"
+                },
                 timeout=5
             )
+            
+            # Если Telegram жалуется на синтаксис Markdown (например, незакрытый символ _ или *)
+            if response.status_code == 400 and "can't parse entities" in response.text:
+                print(f"⚠️ Markdown error, retrying as plain text...", flush=True)
+                # Попытка 2: Отправить как простой текст (без жирного/курсива/ссылок, но зато гарантированно дойдёт)
+                response = requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                    json={
+                        "chat_id": chat_id, 
+                        "text": reply  # parse_mode убран
+                    },
+                    timeout=5
+                )
+            
+            # Проверка финального результата
             if response.status_code == 200 and response.json().get("ok"):
                 print(f"✅ ОТВЕТ ОТПРАВЛЕН в {chat_id}", flush=True)
             else:
-                print(f"❌ Telegram API error: {response.status_code} - {response.text}", flush=True)
+                print(f"❌ Telegram API Error: {response.status_code} | {response.text}", flush=True)
+                
         else:
-            print(f"🤫 НЕ НАЙДЕНО ключей в тексте: '{text}'", flush=True)
-            # Покажем, какие ключи БЛИЗКИ (для отладки)
-            close_matches = [kw for kw in keyword_map.keys() if kw in text_lower or text_lower in kw]
-            if close_matches:
-                print(f"🔍 Близкие совпадения: {close_matches}", flush=True)
+            # Ключ не найден — молчим (чтобы не спамить)
+            print(f"🤫 Не найдено ключей в: '{text}'", flush=True)
 
     except Exception as e:
-        print(f"💥 Webhook CRASH: {e}", flush=True)
+        print(f"💥 CRITICAL Webhook Error: {e}", flush=True)
         import traceback
         traceback.print_exc()
 
