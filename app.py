@@ -48,6 +48,7 @@ def send_max_message(chat_id, text):
             },
             json={"text": text, "format": "markdown"},
             timeout=5,
+            verify="russian_trusted_root_ca.cer",
         )
         if response.status_code == 200:
             print(f"✅ MAX: ответ отправлен в {chat_id}", flush=True)
@@ -397,7 +398,8 @@ try:
             f"{MAX_API_URL}/subscriptions",
             headers={"Authorization": MAX_BOT_TOKEN, "Content-Type": "application/json"},
             json={"url": max_webhook_url},
-            timeout=10
+            timeout=10,
+            verify="russian_trusted_root_ca.cer",
         )
         print(f"🤖 MAX Webhook setup: {res.status_code} - {res.text[:200]}")
     else:
